@@ -935,10 +935,10 @@ async function loadAvailability(){
     if(!res.ok) return;
     const rows = parseCsv(await res.text());
     if(!rows.length) return;
-    const header = rows[0];
-    const pluIdx = header.indexOf('PLU');
-    const availIdx = header.indexOf('Available');
-    if(pluIdx===-1 || availIdx===-1) return;
+    // fixed columns, not header-text lookup: PLU, Category, Item, Price1, Price2, Price3, Available, Notes.
+    // (a header-text search broke silently once the "Available" header cell got
+    // overwritten by checkbox formatting — this is immune to that.)
+    const pluIdx = 0, availIdx = 6;
     const next = {};
     for(let i=1;i<rows.length;i++){
       const r = rows[i];
