@@ -138,6 +138,7 @@
   .bar-card-head .telapsed{font-size:11.5px; color:var(--text-dim);}
   .bar-line{display:flex; justify-content:space-between; font-size:14px; padding:3px 0;}
   .bar-line .bqty{color:var(--brass); font-weight:700; margin-right:6px;}
+  .bar-for{color:var(--violet-bright); font-weight:600; font-size:12.5px;}
   .bar-notes{font-size:12.5px; color:var(--text-dim); font-style:italic; margin-top:8px;}
   .bar-total{display:flex; justify-content:space-between; font-family:'Oswald',sans-serif; font-size:15px; margin-top:10px; padding-top:10px; border-top:1px dashed var(--border);}
   .bar-served-btn{width:100%; margin-top:12px; padding:11px; border-radius:9px; border:1px solid var(--success); background:transparent; color:var(--success); font-weight:600; font-size:13px;}
@@ -608,8 +609,11 @@ let orderSheetOpen = false;
 let joinSheetOpen = false;
 let joinInput = '';
 let pendingAddItem = null;  // item tapped before a table was joined
+let pendingAddName = '';    // optional "whose is this" name carried through the join flow
 let quickAddItem = null;    // item awaiting a price-variant choice
+let quickAddName = '';      // optional "whose is this" name carried through the variant-picker flow
 let tablePollId = null;
+let wheelNameInput = '';    // optional "whose is this" name entered on a wheel result
 
 /* mixers are rung up separately from the spirit itself (a Dash charge) */
 const DASH_PRICE = 1.60;
@@ -802,7 +806,7 @@ async function confirmJoin(){
   tableOrder.slug = tableSlug;
   startTablePolling();
   render();
-  if(pendingAddItem){ const it=pendingAddItem; pendingAddItem=null; requestAdd(it); }
+  if(pendingAddItem){ const it=pendingAddItem; const nm=pendingAddName; pendingAddItem=null; pendingAddName=''; requestAdd(it, nm); }
 }
 function leaveTable(){
   stopTablePolling();
@@ -810,25 +814,26 @@ function leaveTable(){
   render();
 }
 
-function requestAdd(item){
+function requestAdd(item, forName){
   if(is86(item)){ showToast(item.name+' is currently unavailable'); return; }
-  if(!tableSlug){ openJoin(item); return; }
-  if(item.prices.length<=1){ addToOrder(item, item.prices[0]); return; }
-  quickAddItem = item; render();
+  if(!tableSlug){ pendingAddName = forName||''; openJoin(item); return; }
+  if(item.prices.length<=1){ addToOrder(item, item.prices[0], forName); return; }
+  quickAddItem = item; quickAddName = forName||''; render();
 }
-function cancelQuickAdd(){ quickAddItem=null; render(); }
+function cancelQuickAdd(){ quickAddItem=null; quickAddName=''; render(); }
 function chooseVariant(priceIndex){
-  const item = quickAddItem; quickAddItem=null;
-  addToOrder(item, item.prices[priceIndex]);
+  const item = quickAddItem; const nm = quickAddName; quickAddItem=null; quickAddName='';
+  addToOrder(item, item.prices[priceIndex], nm);
 }
-function addToOrder(item, priceObj){
+function addToOrder(item, priceObj, forName){
+  forName = (forName||'').trim();
   if(!tableOrder){ tableOrder = { slug: tableSlug, displayLabel: tableLabel, items: [], notes: '', updatedAt: Date.now() }; }
-  const lineKey = item.id+'::'+priceObj.label;
+  const lineKey = item.id+'::'+priceObj.label+(forName?'::'+forName.toLowerCase():'');
   const existing = tableOrder.items.find(l=>l.lineKey===lineKey);
   if(existing){ existing.qty += 1; }
   else{
     tableOrder.items.push({ lineKey, itemId:item.id, name:item.name,
-      variant: priceObj.label!=='Price' ? priceObj.label : '', price:priceObj.value, qty:1 });
+      variant: priceObj.label!=='Price' ? priceObj.label : '', price:priceObj.value, qty:1, forName });
   }
   tableOrder.updatedAt = Date.now();
   persistTableOrder();
@@ -952,11 +957,21 @@ function openWheel(){
   const cats = wheelCategories();
   if(!cats.length){ showToast('Add some cocktails or shooters first'); return; }
   if(!cats.find(c=>c.id===wheelCategory)) wheelCategory = cats[0].id;
-  wheelOpen=true; wheelSpinning=false; wheelResultIndex=null; wheelCycleIndex=0; render();
+  wheelOpen=true; wheelSpinning=false; wheelResultIndex=null; wheelCycleIndex=0; wheelNameInput=''; render();
 }
 function closeWheel(){ if(wheelSpinning) return; wheelOpen=false; render(); }
 function selectWheelCategory(id){ if(wheelSpinning) return; wheelCategory=id; wheelResultIndex=null; render(); }
-function spinAgain(){ wheelResultIndex=null; render(); }
+function spinAgain(){ wheelResultIndex=null; wheelNameInput=''; render(); }
+function addFromWheel(){
+  const wCat = menu.categories.find(c=>c.id===wheelCategory);
+  const items = wCat ? wCat.items.filter(i=>!is86(i)) : [];
+  const item = items[wheelResultIndex];
+  if(!item) return;
+  const nm = wheelNameInput;
+  wheelOpen = false;
+  wheelNameInput = '';
+  requestAdd(item, nm);
+}
 function spinWheel(){
   if(wheelSpinning) return;
   const cat = menu.categories.find(c=>c.id===wheelCategory);
@@ -1184,7 +1199,12 @@ function renderWheelSheet(){
   </div>`;
 
   if(!landed){ h += `<button class="btn-primary" onclick="spinWheel()" ${wheelSpinning?'disabled':''}>${wheelSpinning?'Spinning…':'Spin'}</button>`; }
-  else { h += `<button class="btn-secondary" onclick="spinAgain()">Spin again</button>`; }
+  else {
+    h += `<label class="field-label">Whose is this? (optional)</label>
+    <input type="text" placeholder="e.g. Sarah" value="${escapeHtml(wheelNameInput)}" oninput="wheelNameInput=this.value">`;
+    h += `<button class="btn-primary" onclick="addFromWheel()">Add to order</button>`;
+    h += `<button class="btn-secondary" onclick="spinAgain()">Spin again</button>`;
+  }
   h += `<button class="btn-ghost" onclick="closeWheel()" ${wheelSpinning?'disabled':''}>Close</button>`;
   h += `</div>`;
   return h;
@@ -1233,7 +1253,7 @@ function renderOrderSheet(){
     tableOrder.items.forEach(l=>{
       h += `<div class="order-line">
         <div class="oinfo">
-          <div class="oname">${escapeHtml(l.name)}${l.variant?`<span class="ovariant"> · ${escapeHtml(l.variant)}</span>`:''}</div>
+          <div class="oname">${escapeHtml(l.name)}${l.variant?`<span class="ovariant"> · ${escapeHtml(l.variant)}</span>`:''}${l.forName?` <span class="ovariant">· for ${escapeHtml(l.forName)}</span>`:''}</div>
           <div class="oprice">${money(l.price)} each</div>
         </div>
         <div class="qty-ctrl">
@@ -1292,7 +1312,7 @@ function renderBarScreen(){
           <span class="telapsed">${fresh?'Updated just now':'Updated '+fmtElapsed(o.updatedAt)}</span>
         </div>`;
       o.items.forEach(l=>{
-        h += `<div class="bar-line"><span><span class="bqty">${l.qty}×</span>${escapeHtml(l.name)}${l.variant?' — '+escapeHtml(l.variant):''}</span><span>${money(l.price*l.qty)}</span></div>`;
+        h += `<div class="bar-line"><span><span class="bqty">${l.qty}×</span>${escapeHtml(l.name)}${l.variant?' — '+escapeHtml(l.variant):''}${l.forName?' <span class="bar-for">for '+escapeHtml(l.forName)+'</span>':''}</span><span>${money(l.price*l.qty)}</span></div>`;
       });
       if(o.notes){ h += `<div class="bar-notes">Note: ${escapeHtml(o.notes)}</div>`; }
       h += `<div class="bar-total"><span>Total</span><span>${money(total)}</span></div>
