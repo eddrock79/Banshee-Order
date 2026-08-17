@@ -903,49 +903,21 @@ function fmtElapsed(ts){
 }
 
 /* ================= 86 AVAILABILITY SYNC ================= */
-// Reads the "Available" column from the master Google Sheet (published as CSV)
-// and greys out matching items by PLU. Fails silently if the sheet isn't
-// shared for viewing yet, or if the fetch is blocked — the page still works
+// Reads live availability from a small Google Apps Script endpoint (deployed
+// against the master Sheet) and greys out matching items by PLU. Not the raw
+// Sheet export URL — that endpoint doesn't send the CORS header browsers
+// require for JS to read it cross-origin, so it silently failed every time
+// regardless of sharing settings. Apps Script Web Apps don't have that problem.
+// Fails silently if the endpoint is unreachable — the page still works
 // normally either way, just without the 86 overlay.
-const AVAILABILITY_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1CgNskPROpFcEgT-0lP_oIF9-hyAdzzFixADI7gGLCh8/export?format=csv&gid=0';
+const AVAILABILITY_SHEET_URL = 'https://script.google.com/macros/s/AKfycbyQ3AbLUENs2cNLMFEKfp2YNkm2f5a1xl7jL2B3GoBLJFrTAPfSUI30aT-WPScYA0WswQ/exec';
 let availability = {}; // plu -> true means 86'd (unavailable)
-
-function parseCsv(text){
-  const rows = []; let row = []; let field = ''; let inQuotes = false;
-  for(let i=0;i<text.length;i++){
-    const c = text[i];
-    if(inQuotes){
-      if(c === '"'){ if(text[i+1] === '"'){ field += '"'; i++; } else { inQuotes = false; } }
-      else field += c;
-    } else {
-      if(c === '"') inQuotes = true;
-      else if(c === ','){ row.push(field); field = ''; }
-      else if(c === '\n'){ row.push(field); rows.push(row); row = []; field = ''; }
-      else if(c === '\r'){ /* skip */ }
-      else field += c;
-    }
-  }
-  if(field.length || row.length){ row.push(field); rows.push(row); }
-  return rows;
-}
 
 async function loadAvailability(){
   try{
     const res = await fetch(AVAILABILITY_SHEET_URL);
     if(!res.ok) return;
-    const rows = parseCsv(await res.text());
-    if(!rows.length) return;
-    // fixed columns, not header-text lookup: PLU, Category, Item, Price1, Price2, Price3, Available, Notes.
-    // (a header-text search broke silently once the "Available" header cell got
-    // overwritten by checkbox formatting — this is immune to that.)
-    const pluIdx = 0, availIdx = 6;
-    const next = {};
-    for(let i=1;i<rows.length;i++){
-      const r = rows[i];
-      if(!r[pluIdx]) continue;
-      next[r[pluIdx].trim()] = (r[availIdx]||'').trim().toUpperCase() !== 'TRUE';
-    }
-    availability = next;
+    availability = await res.json();
     render();
   }catch(e){ /* sheet not shared yet, or offline — page still works without it */ }
 }
